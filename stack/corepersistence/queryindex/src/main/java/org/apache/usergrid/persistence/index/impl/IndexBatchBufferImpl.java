@@ -37,7 +37,6 @@ import rx.Subscriber;
 import rx.Subscription;
 import rx.functions.Action1;
 
-import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -62,7 +61,7 @@ public class IndexBatchBufferImpl implements IndexBatchBuffer {
     private final Counter indexSizeCounter;
     private Producer producer;
     private Subscription producerObservable;
-    private ArrayBlockingQueue blockingQueue;
+    private BlockingQueue blockingQueue;
 
     @Inject
     public IndexBatchBufferImpl(final IndexFig config, final EsProvider provider, MetricsFactory metricsFactory){
@@ -131,13 +130,23 @@ public class IndexBatchBufferImpl implements IndexBatchBuffer {
      * Execute the request, check for errors, then re-init the batch for future use
      */
     private synchronized void execute(boolean refresh ) {
-        try {
+            if(blockingQueue.size()==0){
+                return;
+            }
             BulkRequestBuilder bulkRequest = client.prepareBulk();
             bulkRequest.setRefresh(refresh);
             int count = bufferSize;
+            //clear the queue or proceed to buffersize
             while (blockingQueue.size() > 0 && count-- > 0) {
-                RequestBuilderContainer container = (RequestBuilderContainer)blockingQueue.take();
+                RequestBuilderContainer container;
+                try{
+                    container = (RequestBuilderContainer)blockingQueue.take();
+                }catch (InterruptedException ie){
+                    log.error("Problem taking messages off of queue",ie);
+                    throw new RuntimeException(ie);
+                }
                 ShardReplicationOperationRequestBuilder builder = container.getBuilder();
+                //only handle two types of requests for now, annoyingly there is no base class implementation on BulkRequest
                 if (builder instanceof IndexRequestBuilder) {
                     bulkRequest.add((IndexRequestBuilder) builder);
                 }
@@ -168,10 +177,6 @@ public class IndexBatchBufferImpl implements IndexBatchBuffer {
                             + response.getFailure().getMessage());
                 }
             }
-        }catch (InterruptedException ie){
-            log.error("Problem taking messages off of queue",ie);
-            throw new RuntimeException(ie);
-        }
     }
 
     private static class Producer implements Observable.OnSubscribe<RequestBuilderContainer> {
