@@ -129,22 +129,26 @@ public class IndexBatchBufferImpl implements IndexBatchBuffer {
     /**
      * Execute the request, check for errors, then re-init the batch for future use
      */
-    private synchronized void execute(boolean refresh ) {
-            if(blockingQueue.size()==0){
-                return;
-            }
-            BulkRequestBuilder bulkRequest = client.prepareBulk();
-            bulkRequest.setRefresh(refresh);
-            int count = bufferSize;
-            //clear the queue or proceed to buffersize
-            while (blockingQueue.size() > 0 && count-- > 0) {
-                RequestBuilderContainer container;
-                try{
-                    container = (RequestBuilderContainer)blockingQueue.take();
-                }catch (InterruptedException ie){
-                    log.error("Problem taking messages off of queue",ie);
-                    throw new RuntimeException(ie);
+    private void execute(boolean refresh ) {
+        if (blockingQueue.size() == 0) {
+            return;
+        }
+        BulkRequestBuilder bulkRequest = client.prepareBulk();
+        bulkRequest.setRefresh(refresh);
+        int count = bufferSize;
+        //clear the queue or proceed to buffersize
+        while (blockingQueue.size() > 0 && count-- > 0) {
+            RequestBuilderContainer container = null;
+            try {
+                Object o =   blockingQueue.take();
+                if (o != null) {
+                    container = (RequestBuilderContainer) o;
                 }
+            } catch (InterruptedException ie) {
+                log.error("Problem taking messages off of queue", ie);
+                throw new RuntimeException(ie);
+            }
+            if(container != null) {
                 ShardReplicationOperationRequestBuilder builder = container.getBuilder();
                 //only handle two types of requests for now, annoyingly there is no base class implementation on BulkRequest
                 if (builder instanceof IndexRequestBuilder) {
@@ -154,29 +158,30 @@ public class IndexBatchBufferImpl implements IndexBatchBuffer {
                     bulkRequest.add((DeleteRequestBuilder) builder);
                 }
             }
-            //nothing to do, we haven't added anthing to the index
-            if (bulkRequest.numberOfActions() == 0) {
-                return;
+        }
+        //nothing to do, we haven't added anthing to the index
+        if (bulkRequest.numberOfActions() == 0) {
+            return;
+        }
+
+        final BulkResponse responses;
+
+        try {
+            responses = bulkRequest.execute().actionGet();
+        } catch (Throwable t) {
+            log.error("Unable to communicate with elasticsearch");
+            failureMonitor.fail("Unable to execute batch", t);
+            throw t;
+        }
+
+        failureMonitor.success();
+
+        for (BulkItemResponse response : responses) {
+            if (response.isFailed()) {
+                throw new RuntimeException("Unable to index documents.  Errors are :"
+                        + response.getFailure().getMessage());
             }
-
-            final BulkResponse responses;
-
-            try {
-                responses = bulkRequest.execute().actionGet();
-            } catch (Throwable t) {
-                log.error("Unable to communicate with elasticsearch");
-                failureMonitor.fail("Unable to execute batch", t);
-                throw t;
-            }
-
-            failureMonitor.success();
-
-            for (BulkItemResponse response : responses) {
-                if (response.isFailed()) {
-                    throw new RuntimeException("Unable to index documents.  Errors are :"
-                            + response.getFailure().getMessage());
-                }
-            }
+        }
     }
 
     private static class Producer implements Observable.OnSubscribe<RequestBuilderContainer> {
