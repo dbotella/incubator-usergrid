@@ -18,6 +18,9 @@ package org.apache.usergrid.persistence.index;
 
 import org.elasticsearch.action.delete.DeleteRequestBuilder;
 import org.elasticsearch.action.index.IndexRequestBuilder;
+import rx.Observable;
+
+import java.util.concurrent.Future;
 
 /**
  * Buffer for index operations,
@@ -36,14 +39,16 @@ public interface IndexBatchBuffer {
 
     /**
      * put request into buffer
+     *
      * @param builder
      */
-    public void put(IndexRequestBuilder builder);
+    public Observable put(IndexRequestBuilder builder);
 
     /**
      * put request into buffer
+     *
      * @param builder
      */
-    public void put(DeleteRequestBuilder builder);
+    public Observable put(DeleteRequestBuilder builder);
 
 }
